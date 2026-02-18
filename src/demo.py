@@ -14,9 +14,6 @@ def run_demo():
 
     snapshots: list[tuple[list, list]] = []
 
-    def snapshot():
-        snapshots.append(repo.to_graph())
-
     # --- сценарий демо в виде списка команд ---
     # имя_метода Repo, параметры (как именованные аргументы)
     commands: list[tuple[str, dict]] = [
@@ -30,11 +27,22 @@ def run_demo():
         ("merge", {"branch_name": "feature", "message": "Merge feature into main"}),
     ]
 
+    # вспомогательная функция для красивого вывода команды
+    def format_command(name: str, params: dict) -> str:
+        """commit(message='c1 on main')"""
+        if not params:
+            return f"{name}()"
+        params_str = ", ".join(f"{k}={v!r}" for k, v in params.items())
+        return f"{name}({params_str})"
+
+    # список команд в том же порядке, что и snapshots
+    command_info = [format_command(name, params) for name, params in commands]
+
     # выполняем сценарий и собираем снимки
     for name, params in commands:
         method = getattr(repo, name)
         method(**params)
-        snapshot()
+        snapshots.append(repo.to_graph())
 
     # --- навигация по таймлайну ---
     index = 0
@@ -52,14 +60,16 @@ def run_demo():
         if index < len(snapshots) - 1:
             index += 1
             show_current()
-            print(f"Шаг вперёд: {index + 1}/{len(snapshots)}")
+            cmd = command_info[index]
+            print(f"Шаг вперёд → {index + 1}/{len(snapshots)} | Команда: {cmd}")
 
     def on_left():
         nonlocal index
         if index > 0:
             index -= 1
             show_current()
-            print(f"Шаг назад: {index + 1}/{len(snapshots)}")
+            cmd = command_info[index]
+            print(f"Шаг назад ← {index + 1}/{len(snapshots)} | Команда: {cmd}")
 
     plotter.add_key_event("Right", on_right)
     plotter.add_key_event("Left", on_left)
@@ -68,6 +78,9 @@ def run_demo():
     print("  →  (Right Arrow)  — следующий шаг")
     print("  ←  (Left Arrow)   — предыдущий шаг")
     print("Закрой окно, чтобы завершить программу.")
+
+    # сразу показываем, какая команда привела к начальному состоянию
+    print(f"Начальное состояние: 1/{len(snapshots)} | Команда: {command_info[0]}")
 
     plotter.show()
 
