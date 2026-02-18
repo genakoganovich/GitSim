@@ -1,0 +1,32 @@
+commands:
+  - name: init
+    params: {}
+
+  - name: commit
+    params:
+      message: "c1 on main"
+
+  - name: commit
+    params:
+      message: "c2 on main"
+
+  - name: branch
+    params:
+      name: "feature"
+
+  - name: checkout
+    params:
+      name: "feature"
+
+  - name: commit
+    params:
+      message: "c3 on feature"
+
+  - name: checkout
+    params:
+      name: "main"
+
+  - name: merge
+    params:
+      branch_name: "feature"
+      message: "Merge feature into main"
