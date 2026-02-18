@@ -10,9 +10,13 @@ class GraphVisualizer:
     Простая 3D-визуализация графа репозитория в PyVista.
     HEAD – крупный, ветки – средние, коммиты – маленькие полупрозрачные.
     Перерисовка инкрементальная: добавляем/удаляем только изменившиеся узлы/рёбра.
+
+    manage_window:
+      - True  — сам открывает окно (через show(interactive_update=True)), как раньше.
+      - False — окно открывает внешний код (demo), draw только обновляет сцену.
     """
 
-    def __init__(self):
+    def __init__(self, manage_window: bool = True):
         self.plotter = pv.Plotter()
         self._node_coords: Dict[str, Tuple[float, float, float]] = {}
         self._shown: bool = False
@@ -21,6 +25,8 @@ class GraphVisualizer:
         self._node_actors: Dict[str, Tuple[object, object]] = {}
         # (src, dst, kind) -> line_actor
         self._edge_actors: Dict[Tuple[str, str, str], object] = {}
+
+        self.manage_window = manage_window
 
     def compute_layout(
         self, nodes: List[GraphNode], edges: List[GraphEdge]
@@ -88,7 +94,6 @@ class GraphVisualizer:
             old_pos = old_coords.get(node_id)
             new_pos = coords.get(node_id)
             if old_pos != new_pos:
-                # координаты изменились -> удаляем старый актор и создаём заново
                 sphere_actor, label_actor = self._node_actors[node_id]
                 self.plotter.remove_actor(sphere_actor)
                 self.plotter.remove_actor(label_actor)
@@ -98,7 +103,6 @@ class GraphVisualizer:
         # ---------- узлы: помечаем совсем новые к созданию ----------
         to_create |= (new_node_ids - old_node_ids)
 
-        # вспомогательная функция создания актора для узла
         def create_node_actor(node_id: str) -> None:
             node = nodes_by_id[node_id]
             x, y, z = coords[node.id]
@@ -120,17 +124,14 @@ class GraphVisualizer:
 
             self._node_actors[node_id] = (sphere_actor, label_actor)
 
-        # создаём все новые / перемещённые узлы
         for node_id in to_create:
             create_node_actor(node_id)
 
         # ---------- рёбра: для простоты пересоздаём все ----------
-        # удаляем все старые рёбра
         for actor in list(self._edge_actors.values()):
             self.plotter.remove_actor(actor)
         self._edge_actors.clear()
 
-        # создаём новые рёбра
         for e in edges:
             if e.source not in coords or e.target not in coords:
                 continue
@@ -147,8 +148,13 @@ class GraphVisualizer:
         self.plotter.reset_camera()
 
         # показ / обновление окна
-        if not self._shown and show:
-            self.plotter.show(auto_close=False, interactive_update=True)
-            self._shown = True
-        elif self._shown:
+        if self.manage_window:
+            # старое поведение — сам управляет окном
+            if not self._shown and show:
+                self.plotter.show(auto_close=False, interactive_update=True)
+                self._shown = True
+            elif self._shown:
+                self.plotter.render()
+        else:
+            # окном управляет внешний код (demo): просто перерендерим
             self.plotter.render()

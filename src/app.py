@@ -8,7 +8,7 @@ import functools
 def log_call(func):
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
-        print(f"Вызван метод: {func.__name__}")
+        print(f"--- Вызывается метод: '{func.__name__}' с аргументами {args} и {kwargs}")
         return func(*args, **kwargs)
 
     return wrapper
@@ -47,7 +47,7 @@ class GitSimApp:
 
         # Пошаговый режим: ждём, пока пользователь нажмёт Enter.
         # Можно ввести пробел и нажать Enter, как ты предлагал.
-        input("Нажмите Enter для продолжения...")
+        # input("Нажмите Enter для продолжения...")
 
     @log_call
     def init(self, show: bool = False) -> None:
