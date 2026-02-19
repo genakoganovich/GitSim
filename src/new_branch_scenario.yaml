@@ -1,0 +1,11 @@
+commands:
+  - name: init
+    params: {}
+
+  - name: branch
+    params:
+      name: "feature"
+
+  - name: checkout
+    params:
+      name: "feature"

@@ -23,5 +23,6 @@ def run_demo(yaml_path: Optional[str] = None) -> None:
 if __name__ == "__main__":
     # можно вызывать так:
     # run_demo()                          # встроенный сценарий
-    run_demo("scenario.yaml")           # сценарий из YAML
+    # run_demo("scenario.yaml")           # сценарий из YAML
+    run_demo("new_branch_scenario.yaml")           # сценарий из YAML
     # run_demo()
