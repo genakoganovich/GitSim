@@ -6,16 +6,6 @@ from .models import GraphNode, GraphEdge
 
 
 class GraphVisualizer:
-    """
-    Простая 3D-визуализация графа репозитория в PyVista.
-    HEAD – крупный, ветки – средние, коммиты – маленькие полупрозрачные.
-    Перерисовка инкрементальная: добавляем/удаляем только изменившиеся узлы/рёбра.
-
-    manage_window:
-      - True  — сам открывает окно (через show(interactive_update=True)), как раньше.
-      - False — окно открывает внешний код (demo), draw только обновляет сцену.
-    """
-
     def __init__(self, manage_window: bool = True):
         self.plotter = pv.Plotter()
         self._node_coords: Dict[str, Tuple[float, float, float]] = {}
@@ -26,16 +16,24 @@ class GraphVisualizer:
         # (src, dst, kind) -> line_actor
         self._edge_actors: Dict[Tuple[str, str, str], object] = {}
 
+        # актор вертикальной оси веток (через main)
+        self._branch_axis_actor: object | None = None
+
         self.manage_window = manage_window
 
     def compute_layout(
-        self, nodes: List[GraphNode], edges: List[GraphEdge]
+            self, nodes: List[GraphNode], edges: List[GraphEdge]
     ) -> Dict[str, Tuple[float, float, float]]:
         """
-        Простейший layout:
-        - коммиты по оси X на линии y=0
-        - ветки на линии y=1
-        - HEAD на линии y=2
+        Layout:
+        - оси X,Y — горизонтальная плоскость, Z — вертикаль;
+        - все коммиты и HEAD — всегда в плоскости z = 0;
+        - ветки образуют вертикальный столб по Z в точке x = branch_x:
+            * относительный порядок и расстояния между ветками сохраняются
+              из предыдущих вызовов (берём self._node_coords);
+            * при появлении новой ветки она добавляется внизу столба;
+            * затем весь столб сдвигается вверх/вниз так, чтобы
+              АКТИВНАЯ ветка (HEAD --points_to--> branch) оказалась в z = 0.
         """
         coords: Dict[str, Tuple[float, float, float]] = {}
 
@@ -43,17 +41,76 @@ class GraphVisualizer:
         branch_ids = [n.id for n in nodes if n.kind == "branch"]
         head_ids = [n.id for n in nodes if n.kind == "head"]
 
-        # Коммиты: сортируем по числовому hash'у (у нас 1,2,3,...)
+        # --- коммиты: по оси X, в плоскости z = 0 ---
         for i, cid in enumerate(sorted(commit_ids, key=lambda x: int(x))):
-            coords[cid] = (float(i), 0.0, 0.0)
+            coords[cid] = (float(i), 0.0, 0.0)  # (x, y, z)
 
-        # Ветки
-        for i, bid in enumerate(sorted(branch_ids)):
-            coords[bid] = (float(i), 1.0, 0.0)
+        # базовая точка справа от последнего коммита
+        if commit_ids:
+            max_commit_x = max(coords[cid][0] for cid in commit_ids)
+        else:
+            max_commit_x = 0.0
 
-        # HEAD
-        for i, hid in enumerate(sorted(head_ids)):
-            coords[hid] = (float(i), 2.0, 0.0)
+        branch_x = max_commit_x + 1.5  # колонка веток
+        head_x = branch_x + 1.0  # колонка HEAD
+
+        # --- восстанавливаем старые z веток (для сохранения столба) ---
+        old_branch_z: Dict[str, float] = {}
+        for bid in branch_ids:
+            if bid in self._node_coords:
+                _, _, z = self._node_coords[bid]
+                old_branch_z[bid] = z
+
+        branch_z_step = 0.6
+
+        # базовый z для НОВЫХ веток (если раньше их не было):
+        # кладём их ещё ниже существующих
+        if old_branch_z:
+            min_old_z = min(old_branch_z.values())
+            new_z_next = min_old_z - branch_z_step
+        else:
+            new_z_next = 0.0  # первая ветка пойдёт в z = 0
+
+        # назначаем z всем веткам: старые сохраняем, новые добавляем ниже
+        for bid in sorted(branch_ids):  # порядок по имени, но z берём из истории
+            if bid in old_branch_z:
+                z = old_branch_z[bid]
+            else:
+                z = new_z_next
+                new_z_next -= branch_z_step
+            coords[bid] = (branch_x, 0.0, z)
+
+        # --- определяем активную ветку по ребру HEAD --points_to--> branch ---
+        active_branch_id = None
+        if head_ids:
+            head_id = head_ids[0]  # у нас один HEAD
+            for e in edges:
+                if (
+                        e.kind == "points_to"
+                        and e.source == head_id
+                        and e.target in branch_ids
+                ):
+                    active_branch_id = e.target
+                    break
+
+        # fallback, если по какой-то причине нет такого ребра
+        if active_branch_id is None:
+            if "main" in branch_ids:
+                active_branch_id = "main"
+            elif branch_ids:
+                active_branch_id = sorted(branch_ids)[0]
+
+        # --- сдвигаем ВЕСЬ столб веток так, чтобы активная ветка стала в z = 0 ---
+        if active_branch_id is not None and active_branch_id in coords:
+            _, _, active_z = coords[active_branch_id]
+            shift = -active_z  # на сколько надо поднять/опустить столб
+            for bid in branch_ids:
+                x, y, z = coords[bid]
+                coords[bid] = (x, y, z + shift)
+
+        # --- HEAD: всегда в плоскости коммитов z = 0, правее веток ---
+        for hid in head_ids:
+            coords[hid] = (head_x, 0.0, 0.0)
 
         self._node_coords = coords
         return coords
@@ -143,6 +200,42 @@ class GraphVisualizer:
             actor = self.plotter.add_mesh(line, color=color, line_width=2)
             key = (e.source, e.target, e.kind)
             self._edge_actors[key] = actor
+
+            # ---------- вертикальная ось веток (через main) ----------
+            # удаляем старую ось, если была
+            if self._branch_axis_actor is not None:
+                self.plotter.remove_actor(self._branch_axis_actor)
+                self._branch_axis_actor = None
+
+            # ищем узел main среди веток
+            branch_nodes = [n for n in nodes if n.kind == "branch"]
+            main_node = next((n for n in branch_nodes if n.id == "main"), None)
+
+            if main_node is not None and main_node.id in coords:
+                x_main, y_main, z_main = coords[main_node.id]
+
+                # определяем диапазон z по всем веткам
+                branch_z_values = [
+                    coords[n.id][2]
+                    for n in branch_nodes
+                    if n.id in coords
+                ]
+                if branch_z_values:
+                    z_min = min(branch_z_values)
+                    z_max = max(branch_z_values)
+                else:
+                    z_min = z_max = z_main
+
+                margin = 0.4  # небольшой отступ сверху/снизу
+                z1 = z_min - margin
+                z2 = z_max + margin
+
+                axis_line = pv.Line((x_main, y_main, z1), (x_main, y_main, z2))
+                self._branch_axis_actor = self.plotter.add_mesh(
+                    axis_line,
+                    color="black",
+                    line_width=1,
+                )
 
         # камера на все объекты
         self.plotter.reset_camera()
