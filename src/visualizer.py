@@ -1,7 +1,5 @@
 from typing import List, Dict, Tuple
-
 import pyvista as pv
-
 from .models import GraphNode, GraphEdge
 
 
@@ -25,95 +23,84 @@ class GraphVisualizer:
             self, nodes: List[GraphNode], edges: List[GraphEdge]
     ) -> Dict[str, Tuple[float, float, float]]:
         """
-        Layout:
-        - оси X,Y — горизонтальная плоскость, Z — вертикаль;
-        - все коммиты и HEAD — всегда в плоскости z = 0;
-        - ветки образуют вертикальный столб по Z в точке x = branch_x:
-            * относительный порядок и расстояния между ветками сохраняются
-              из предыдущих вызовов (берём self._node_coords);
-            * при появлении новой ветки она добавляется внизу столба;
-            * затем весь столб сдвигается вверх/вниз так, чтобы
-              АКТИВНАЯ ветка (HEAD --points_to--> branch) оказалась в z = 0.
+        Рассчитывает координаты узлов: коммиты (Z=0), ветки (вертикальный столб), HEAD (Z=0).
         """
+        # 1. Группируем ID узлов по типам для удобства
+        node_ids = {
+            kind: [n.id for n in nodes if n.kind == kind]
+            for kind in ["commit", "branch", "head"]
+        }
+
         coords: Dict[str, Tuple[float, float, float]] = {}
 
-        commit_ids = [n.id for n in nodes if n.kind == "commit"]
-        branch_ids = [n.id for n in nodes if n.kind == "branch"]
-        head_ids = [n.id for n in nodes if n.kind == "head"]
+        # 2. Размещаем коммиты (определяют базовую сетку по X)
+        max_commit_x = self._layout_commits(node_ids["commit"], coords)
 
-        # --- коммиты: по оси X, в плоскости z = 0 ---
-        for i, cid in enumerate(sorted(commit_ids, key=lambda x: int(x))):
-            coords[cid] = (float(i), 0.0, 0.0)  # (x, y, z)
+        # Задаем константы смещения колонок
+        branch_x = max_commit_x + 1.5
+        head_x = branch_x + 1.0
 
-        # базовая точка справа от последнего коммита
-        if commit_ids:
-            max_commit_x = max(coords[cid][0] for cid in commit_ids)
-        else:
-            max_commit_x = 0.0
+        # 3. Размещаем ветки (вертикальный столб с выравниванием по активной)
+        active_id = self._find_active_branch(node_ids["branch"], node_ids["head"], edges)
+        self._layout_branches(node_ids["branch"], branch_x, active_id, coords)
 
-        branch_x = max_commit_x + 1.5  # колонка веток
-        head_x = branch_x + 1.0  # колонка HEAD
-
-        # --- восстанавливаем старые z веток (для сохранения столба) ---
-        old_branch_z: Dict[str, float] = {}
-        for bid in branch_ids:
-            if bid in self._node_coords:
-                _, _, z = self._node_coords[bid]
-                old_branch_z[bid] = z
-
-        branch_z_step = 0.6
-
-        # базовый z для НОВЫХ веток (если раньше их не было):
-        # кладём их ещё ниже существующих
-        if old_branch_z:
-            min_old_z = min(old_branch_z.values())
-            new_z_next = min_old_z - branch_z_step
-        else:
-            new_z_next = 0.0  # первая ветка пойдёт в z = 0
-
-        # назначаем z всем веткам: старые сохраняем, новые добавляем ниже
-        for bid in sorted(branch_ids):  # порядок по имени, но z берём из истории
-            if bid in old_branch_z:
-                z = old_branch_z[bid]
-            else:
-                z = new_z_next
-                new_z_next -= branch_z_step
-            coords[bid] = (branch_x, 0.0, z)
-
-        # --- определяем активную ветку по ребру HEAD --points_to--> branch ---
-        active_branch_id = None
-        if head_ids:
-            head_id = head_ids[0]  # у нас один HEAD
-            for e in edges:
-                if (
-                        e.kind == "points_to"
-                        and e.source == head_id
-                        and e.target in branch_ids
-                ):
-                    active_branch_id = e.target
-                    break
-
-        # fallback, если по какой-то причине нет такого ребра
-        if active_branch_id is None:
-            if "main" in branch_ids:
-                active_branch_id = "main"
-            elif branch_ids:
-                active_branch_id = sorted(branch_ids)[0]
-
-        # --- сдвигаем ВЕСЬ столб веток так, чтобы активная ветка стала в z = 0 ---
-        if active_branch_id is not None and active_branch_id in coords:
-            _, _, active_z = coords[active_branch_id]
-            shift = -active_z  # на сколько надо поднять/опустить столб
-            for bid in branch_ids:
-                x, y, z = coords[bid]
-                coords[bid] = (x, y, z + shift)
-
-        # --- HEAD: всегда в плоскости коммитов z = 0, правее веток ---
-        for hid in head_ids:
+        # 4. Размещаем HEAD (всегда справа и на уровне Z=0)
+        for hid in node_ids["head"]:
             coords[hid] = (head_x, 0.0, 0.0)
 
         self._node_coords = coords
         return coords
+
+    # --- Вспомогательные методы (Private helpers) ---
+
+    def _layout_commits(self, commit_ids: List[str], coords: Dict) -> float:
+        """Размещает коммиты по горизонтали и возвращает крайнюю координату X."""
+        for i, cid in enumerate(sorted(commit_ids, key=lambda x: int(x))):
+            coords[cid] = (float(i), 0.0, 0.0)
+
+        return max((coords[cid][0] for cid in commit_ids), default=0.0)
+
+    def _find_active_branch(self, branch_ids: List[str], head_ids: List[str], edges: List[GraphEdge]) -> str:
+        """Определяет ID активной ветки на основе связей HEAD."""
+        if not head_ids:
+            return ""
+
+        # Ищем через ребро points_to
+        for e in edges:
+            if e.kind == "points_to" and e.source == head_ids[0] and e.target in branch_ids:
+                return e.target
+
+        # Fallback логика
+        if "main" in branch_ids:
+            return "main"
+        return sorted(branch_ids)[0] if branch_ids else ""
+
+    def _layout_branches(self, branch_ids: List[str], x: float, active_id: str, coords: Dict):
+        """Логика формирования вертикального столба веток с сохранением истории."""
+        branch_z_step = 0.6
+        temp_z: Dict[str, float] = {}
+
+        # Собираем существующие координаты Z из истории
+        old_z_map = {
+            bid: self._node_coords[bid][2]
+            for bid in branch_ids if bid in self._node_coords
+        }
+
+        # Определяем начальную точку для новых веток (ниже всех существующих)
+        new_z_cursor = min(old_z_map.values(), default=0.0 + branch_z_step)
+
+        # Назначаем предварительные Z
+        for bid in sorted(branch_ids):
+            if bid in old_z_map:
+                temp_z[bid] = old_z_map[bid]
+            else:
+                new_z_cursor -= branch_z_step
+                temp_z[bid] = new_z_cursor
+
+        # Сдвигаем весь столб так, чтобы активная ветка оказалась на Z = 0
+        shift = -temp_z.get(active_id, 0.0)
+        for bid in branch_ids:
+            coords[bid] = (x, 0.0, temp_z[bid] + shift)
 
     def draw(
             self, nodes: List[GraphNode], edges: List[GraphEdge], show: bool = True
